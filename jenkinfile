@@ -1,0 +1,82 @@
+pipeline {
+    agent any
+    tools {
+        maven "localMaven"
+        jdk "Java8"
+    }
+
+    environment {
+        NEXUS_VERSION = "nexus3"                  // Nexus version
+        NEXUS_PROTOCOL = "http"                    // Protocol (http or https)
+        NEXUS_URL = "65.2.189.169:8081"            // Nexus URL
+        NEXUS_REPOSITORY = "LoginWebApp"           // Nexus repository
+        NEXUS_CREDENTIAL_ID = "nexusCredential"    // Jenkins credentials ID
+        ARTIFACT_VERSION = "${BUILD_NUMBER}"        // Artifact version based on build number
+    }
+
+    stages {
+        stage("Check out") {
+            steps {
+                script {
+                    git branch: 'feature/nexusUpload', url: 'https://github.com/ranjit4github/LoginWebApp.git'
+                }
+            }
+        }
+
+        stage("Build") {
+            steps {
+                script {
+                    sh "mvn clean package"
+                }
+            }
+        }
+
+        stage("Publish to Nexus") {
+            steps {
+                script {
+                    // Read the POM file
+                    def pom = readMavenPom file: "pom.xml"
+                    
+                    // Define artifact path
+                    def artifactPath = "target/${pom.artifactId}-${ARTIFACT_VERSION}.${pom.packaging}"
+
+                    // Check if the artifact exists
+                    if (fileExists(artifactPath)) {
+                        echo "*** Uploading: ${artifactPath} to Nexus ***"
+                        
+                        // Upload to Nexus
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: ARTIFACT_VERSION,
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                 classifier: '',
+                                 file: artifactPath,
+                                 type: pom.packaging]
+                            ]
+                        )
+                    } else {
+                        error "*** Artifact not found: ${artifactPath} ***"
+                    }
+                }
+            }
+        }
+
+        stage('Execute Ansible Play - CD') {
+            agent {
+                label 'ansible'
+            }
+            steps {
+                script {
+                    git branch: 'feature/ansibleNexus', url: 'https://github.com/ranjit4github/Ansible_Demo_Project.git'
+                }
+                sh "ansible-playbook -e vers=${BUILD_NUMBER} roles/site.yml"
+            }
+        }
+    }
+}
